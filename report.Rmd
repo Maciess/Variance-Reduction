@@ -1,0 +1,106 @@
+---
+title: "Project 2 Monte Carlo"
+author: "Maciej Szczutko"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+library(MASS)
+```
+
+```{r params}
+
+r <- 0.05
+sigma <- 0.25
+mu_star <- r - sigma^2
+s_0 <- 100
+K <- 100
+
+source("helpers.R")
+
+```
+
+# Problem description
+
+We are interested in estimating the following (called an option, with discounted payoff at time 1) with price given by the formula
+
+$$
+I=e^{-r} E\left(A_n-K\right)_{+},
+$$
+where
+$$
+A_n=\frac{1}{n} \sum_{i=1}^n S(i / n), 
+$$
+and 
+$$
+S(t)=S(0) \exp \left(\mu^* t+\sigma B(t)\right), \quad 0 \leq t \leq T
+$$
+where $B(t)(0 \leq t \leq T)$ is Brownian motion.
+
+TODO: extend interpretation by my own comments.
+
+## European and Asian option
+
+In the case n = 1, this is called a European call option; otherwise, it is called an Asian call option.
+
+
+## Used methods
+
+  1. Crude Monte Carlo estimator
+  2. Stratified estimator
+  
+  
+## Monte Carlo description
+
+TO DO Add brownian motion description. 
+
+First we need to generate Brownian Motion $n$ points, equally spaced sample on $[0,1]$. We will use the fact that $\mathbf{B}=(B(1 / n), B(2 / n), \ldots, B(1))$ is a multivariate normal random variable $\mathcal{N}(\mathbf{0}, \boldsymbol{\Sigma})$ with the covariance matrix
+
+$$
+\boldsymbol{\Sigma}(i, j)=\frac{1}{n} \min (i, j).
+$$
+
+
+
+
+```{r monte-carlo}
+
+n <- 1
+
+
+numOfReplicate <- 1000
+monteCarloReplicates <- replicate(numOfReplicate, {
+gmbSample <- GetGeometricBrownianSample(s_0, r, sigma, n);
+A <- mean(gmbSample);
+I <- exp(-r) * max(A-K, 0)},
+simplify = "vector")
+
+monteCarlo_estimator <- mean(monteCarloReplicates)
+
+
+```
+
+```{r plots-for-MC}
+library(ggplot2)
+
+
+data <- data.frame(
+  Value = c(monteCarloReplicates, monteCarloReplicates),
+  Group = rep(c("Crude Monte Carlo estimator", "Place holder"), each = 100)
+)
+
+ggplot(data, aes(x = Group, y = Value, fill = Group)) +
+  geom_boxplot() +
+  labs(title = paste("CMCE vs ... for European Option with R =", numOfReplicate),
+       x = "Groups",
+       y = "Values") +
+  theme_minimal() +
+  scale_fill_manual(values = c("skyblue", "orange"))
+
+
+```
+
+
+
