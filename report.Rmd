@@ -6,7 +6,7 @@ output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = F)
+knitr::opts_chunk$set(echo = F, warning = F)
 library(MASS)
 ```
 
@@ -76,16 +76,69 @@ gmbSample <- GetGeometricBrownianSample(s_0, r, sigma, n);
 A <- mean(gmbSample);
 I <- exp(-r) * max(A-K, 0)},
 simplify = "vector")
-
-monteCarlo_estimator <- mean(monteCarloReplicates)
+monteCarloEstimator <- mean(monteCarloReplicates)
 
 
 ```
 
-```{r plots-for-MC}
+
+```{r simulation-for-larger-n}
+monteCarloSimulation <- function(n, numOfReplicate, s_0, r, sigma, K)
+{
+  monteCarloReplicates <- replicate(numOfReplicate, {
+    gmbSample <- GetGeometricBrownianSample(s_0, r, sigma, n)
+    
+    A <- mean(gmbSample)
+    
+    I <- exp(-r) * max(A - K, 0)
+  },
+  simplify = "vector")
+  monteCarloReplicates
+}
+
+```
+
+```{r power-of-two}
+
+indexVector <- 2^(0:6)
+
+R <- 1000
+mcResults <- as.data.frame(sapply(indexVector, function(i) {monteCarloSimulation(n=i, numOfReplicate = R, s_0, r, sigma, K)}))
+names(mcResults) <- indexVector
+
+
+
+
+
+```
+
+```{r}
+library(kableExtra)
+mcEstimators <- colMeans(mcResults)
+kbl(as.data.frame(t(mcEstimators)), booktabs = T, caption = paste0("MC estimators values for R=", R), digits = 3) %>%
+  kable_classic()
+```
+
+
+
+
+```{r plot-for-different-n, fig.dim=c(7, 3)}
 library(ggplot2)
+library(tidyr)
 
 
+df_long <- pivot_longer(mcResults, cols = everything(), names_to = "Variable", values_to = "Value")
+df_long$Variable <- factor(df_long$Variable, levels = names(mcResults))
+
+# Create the boxplot
+ggplot(df_long, aes(x = Variable, y = Value)) +
+  geom_boxplot(fill = "skyblue", color = "black") +
+  labs(title = "Boxplot of Each Column", x = "Columns", y = "Values") +
+  theme_minimal()
+```
+
+
+```{r plots-for-MC}
 data <- data.frame(
   Value = c(monteCarloReplicates, monteCarloReplicates),
   Group = rep(c("Crude Monte Carlo estimator", "Place holder"), each = 100)
@@ -102,5 +155,31 @@ ggplot(data, aes(x = Group, y = Value, fill = Group)) +
 
 ```
 
+## Theoretical calculation for European option using Black-Scholes formula
 
+We can compare the simulation results for European option with theoretical calculation. The formula is
+
+$$
+E(S(1)-K)_{+}=S(0) \Phi\left(d_1\right)-K e^{-r} \Phi\left(d_2\right),
+$$
+
+where
+
+$$
+d_1=\frac{1}{\sigma}\left[\log \left(\frac{S(0)}{K}\right)+r+\frac{\sigma^2}{2}\right],
+$$
+and
+
+$$
+d_2=d_1-\sigma .
+$$
+
+
+```{r black-scholes}
+d1 <- (1 / sigma) * (log(s_0 / K) + r + (sigma ^ 2 / 2))
+d2 <- d1 - sigma
+blackScholes <- (s_0 * pnorm(d1)) - (K * exp(-r) * pnorm(d2))
+blackScholes <- exp(-r) * blackScholes
+```
+Using our setup parameters we obtain value $`r blackScholes`$. It is alaign with the MC simulation result. Even using $R=`r R`$ replication we have quite bias simulation. 
 
