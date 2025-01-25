@@ -28,3 +28,28 @@ GetGeometricBrownianSample <- function(S, r, sigma, n)
   S*exp(mu * time + sigma * brownianSample)
 }
 
+
+GetStratifiedMvNormFromJthStratum <- function(n, j, m) 
+{
+  # to powinno zwrocic probke rozmiaru 1 ze straty j-tej.
+  covMatrix <- generate_matrix(n)
+  mean <- replicate(n, 0)
+  A <- chol(covMatrix)
+  u <- runif(1)
+  arg <- (j - 1) / m + (1 / m) * u
+  d_square <- qchisq(arg, df = n)
+  eps <- rnorm(n)
+  eps <- eps / sqrt(sum(eps^2))
+  Z <- sqrt(d_square) * eps
+  as.vector(A %*% matrix(Z))
+}
+
+GetGmbFromStrata <- function(S, r, sigma, n, j, m)
+{
+  brownianSample <-GetStratifiedMvNormFromJthStratum(n, j, m)
+  time <- (1:n) / n
+  mu <- r - (sigma^2) / 2
+  S*exp(mu * time + sigma * brownianSample)
+}
+
+

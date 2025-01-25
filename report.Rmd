@@ -69,8 +69,9 @@ $$
 
 n <- 1
 
+set.seed(42)
 
-numOfReplicate <- 1000
+numOfReplicate <- 10000
 monteCarloReplicates <- replicate(numOfReplicate, {
 gmbSample <- GetGeometricBrownianSample(s_0, r, sigma, n);
 A <- mean(gmbSample);
@@ -98,11 +99,12 @@ monteCarloSimulation <- function(n, numOfReplicate, s_0, r, sigma, K)
 
 ```
 
-```{r power-of-two}
+```{r power-of-two, cache=TRUE}
 
-indexVector <- 2^(0:6)
+set.seed(42)
+indexVector <- 2^(0:5)
 
-R <- 1000
+R <- 10000
 mcResults <- as.data.frame(sapply(indexVector, function(i) {monteCarloSimulation(n=i, numOfReplicate = R, s_0, r, sigma, K)}))
 names(mcResults) <- indexVector
 
@@ -122,7 +124,7 @@ kbl(as.data.frame(t(mcEstimators)), booktabs = T, caption = paste0("MC estimator
 
 
 
-```{r plot-for-different-n, fig.dim=c(7, 3)}
+```{r plot-for-different-n, fig.dim=c(6, 2.5)}
 library(ggplot2)
 library(tidyr)
 
@@ -179,7 +181,198 @@ $$
 d1 <- (1 / sigma) * (log(s_0 / K) + r + (sigma ^ 2 / 2))
 d2 <- d1 - sigma
 blackScholes <- (s_0 * pnorm(d1)) - (K * exp(-r) * pnorm(d2))
-blackScholes <- exp(-r) * blackScholes
 ```
-Using our setup parameters we obtain value $`r blackScholes`$. It is alaign with the MC simulation result. Even using $R=`r R`$ replication we have quite bias simulation. 
+Using our setup parameters we obtain value $`r blackScholes`$. It is align with the MC simulation result. Even using $R=`r R`$ replication we have quite bias simulation. 
 
+
+## Stratified sampling 
+
+
+Stratified sampling is a sampling technique in which a population is divided into smaller, homogeneous groups called strata based on shared characteristics (e.g., age, gender, income). In this example the strata is determined by the ellipses. Then, a random sample is taken from each stratum proportionally or equally to ensure all groups are represented in the final sample. This method improves accuracy and reduces sampling bias and variance. 
+
+
+### The algorithm for generating sample from $N(0, \Sigma)$.
+
+  1. Perform Cholesky decomposition: $\boldsymbol{\Sigma}=\mathbf{A A}^T$.
+  2. Sample $\boldsymbol{\xi}=\left(\xi_1, \ldots, \xi_n\right)^T$, where $\xi_i \sim \mathcal{N}(0,1)$ i.i.d. Set
+
+$$
+\mathbf{X}=\left(X_1, \ldots, X_n\right)^T=\left(\frac{\xi_1}{\|\boldsymbol{\xi}\|}, \ldots, \frac{\xi_n}{\|\boldsymbol{\xi}\|}\right)^T
+$$
+
+  3. Sample $U \sim \mathcal{U}(0,1)$. Set
+
+$$
+D^2=F_{\chi_n^2}^{-1}\left(\frac{i-1}{m}+\frac{1}{m} U\right)
+$$
+
+  4. Set $\mathbf{Z}=\left(Z_1, \ldots, Z_n\right)=\left(D X_1, \ldots, D X_n\right)$.
+  5. Return $\mathbf{B}^i=\mathbf{A Z}$.
+
+
+```{r stratified-sample-n2}
+m <- 5
+n <- 2
+samples_per_stratum <- 500
+
+data_list <- lapply(1:m, function(j) {
+  # Generate samples for each stratum
+  samples <- replicate(samples_per_stratum, GetStratifiedMvNormFromJthStratum(n, j, m))
+  df <- as.data.frame(t(samples)) # Transpose to get rows as samples
+  df$j <- j # Add stratum column
+  return(df)
+})
+
+# Combine all strata into a single data frame
+result_df <- do.call(rbind, data_list)
+colnames(result_df) <- c(paste0("V", 1:n), "j") # Name columns
+
+```
+
+Lets see how the algorithm works. The $\Sigma$ is the same as before for Brownian motion. 
+
+```{r plot-strata, fig.cap="Starat viusalization", fig.dim=c(7,3)}
+library(ggplot2)
+
+ggplot(result_df, aes(x = V1, y = V2, color = as.factor(j))) +
+  geom_point(size = 0.7, alpha = 0.7) +
+  scale_color_discrete(name = "Stratum (j)") + # Legend title
+  labs(
+    title = paste0("Stratified Samples with m=", m, " and R_j=", samples_per_stratum),
+    x = "V1",
+    y = "V2"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right")
+```
+
+It looks that indeed procedure works as expected. Note that our stratas are ellipses, not the circle. But the assumption that each strata has probability $\frac{1}{m}$ still holds.
+
+### Estimator formulas
+
+$$
+\hat{Y}_{R_j}^j=\frac{1}{R_j} \sum_{i=1}^{R_j} Y_i^j, \quad \hat{Y}_R^{\mathrm{str}}=p_1 \hat{Y}_{R_1}^1+\ldots+p_m \hat{Y}_{R_{\mathrm{m}}}^m, 
+$$
+
+
+$$ \operatorname{Var} \hat{Y}_R^j=\frac{\sigma_j^2}{R_j},  \quad \operatorname{Var} \hat{Y}_R^{\mathrm{str}}=\sum_{j=1}^m p_j^2 \operatorname{Var} \hat{Y}_R^j=\sum_{j=1}^m \frac{p_j^2}{R_j} \sigma_j^2 .$$ 
+
+### Proportional scheme for n=1. 
+
+For stratified sampling we can use also the different number of replication for each stratum. In proportional scheme we simply take $R_j=p_jR$. For below simulation I will use $m=5$ and $R=10000$ (to be comparable with CRMC).
+
+```{r estimator}
+StratifiedSimulation <-
+  function(n,
+           numOfReplicatePerStrata,
+           s_0,
+           r,
+           sigma,
+           K)
+  {
+    R <- sum(numOfReplicatePerStrata)
+    m <- length(numOfReplicatePerStrata)
+    stratifiedReplicates <-
+      sapply(1:m, function(j)
+        replicate(numOfReplicatePerStrata[j],
+                  {
+                    gmbSample <- GetGmbFromStrata(s_0, r, sigma, n, j, m)
+                    A <- mean(gmbSample)
+                    I <- exp(-r) * max(A - K, 0)
+                  }))
+    stratifiedReplicates
+  }
+
+
+
+```
+
+
+```{r}
+set.seed(42)
+R <- 10000
+m <- 5
+n <- 1
+samples_per_stratum <- rep(R/m, m)
+
+stratifiedTestForN1 <- StratifiedSimulation(1, samples_per_stratum, s_0, r, sigma, K)
+
+estimator_for_n_1 <- sum(1/m * colMeans(stratifiedTestForN1))
+
+probs <- rep(1/m, m)^2
+var_estimator_for_n_1 <- sum((probs / samples_per_stratum) * apply(stratifiedTestForN1, 2, var))
+
+mc_var_n1 <- var(mcResults[, 1]) / nrow(mcResults)
+
+```
+
+
+The estimator for $\hat{I} = `r estimator_for_n_1`$. Calculated variance is $`r var_estimator_for_n_1`$. For MC the estimator variance is $`r mc_var_n1`$. So the variance is decreased even with simple choice of strata numbers.
+
+### Optimal choice for $n=1$.
+
+Now we will use optimal allocation scheme. From theorem presented in the script we can take 
+
+$$
+R_j=\frac{p_j \sigma_j}{\sum_{i=1}^{m} p_i \sigma_i} R.
+$$
+
+As we don't know the variance for each stratum (or it's to complex to calculate by hand for me) we can use following procedure.
+
+  1. Use proportional scheme to estimate $\sigma_i$.
+  2. Calculate $R_j$ based using estimator for $\sigma_i$.
+  3. Sample again and estimate.
+
+
+```{r optional-allocation-scheme}
+
+set.seed(42)
+sigma.estimated <-  apply(stratifiedTestForN1, 2, sd)
+factor <- R / sum(probs*sigma.estimated) 
+
+r.for.optimal.scheme <- floor(probs*sigma.estimated * factor)
+
+optima.scheme.replicate.n1 <- StratifiedSimulation(1, r.for.optimal.scheme, s_0, r, sigma, K)
+
+estimator.for.optimal.n1 <- sum(unlist(lapply(optima.scheme.replicate.n1, mean)) * 1/m)
+
+
+var <- unlist(lapply(optima.scheme.replicate.n1, var))
+
+var.for.optimal.n1 <- sum(probs * var / r.for.optimal.scheme )
+
+```
+
+
+The estimated value for $I = `r estimator.for.optimal.n1`$. The variance is $`r var.for.optimal.n1`$. 
+
+### $n \geq 2$ using proportional scheme 
+
+Now we can calculate the estimator for higher $n$. Proportion as before. 
+
+```{r proportional-scheme-larger-n, cache=TRUE}
+
+proportional.scheme <- sapply(indexVector, function(i)
+  {
+    result.for.single.n <- StratifiedSimulation(i, samples_per_stratum, s_0, r, sigma, K)
+    I.stratified.estimator <- sum(1/m * colMeans(result.for.single.n))
+    probs <- rep(1/m, m)^2
+    I.stratified.var <- sum((probs / samples_per_stratum) * apply(result.for.single.n, 2, var))
+    c(I.stratified.estimator, I.stratified.var)
+  }
+)
+
+results.proportional <- data.frame(t(proportional.scheme))
+
+```
+```{r print-results-proportional}
+names(results.proportional) <- c("E(I)", "Var(I)")
+kbl(results.proportional, caption = "temp")
+```
+
+
+
+### $n \geq 2$ using optimal allocation scheme
+
+
+#Todo
