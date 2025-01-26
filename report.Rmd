@@ -109,6 +109,7 @@ mcResults <- as.data.frame(sapply(indexVector, function(i) {monteCarloSimulation
 names(mcResults) <- indexVector
 
 
+variance.mc <- apply(mcResults, 2, var) / R
 
 
 
@@ -119,6 +120,8 @@ library(kableExtra)
 mcEstimators <- colMeans(mcResults)
 kbl(as.data.frame(t(mcEstimators)), booktabs = T, caption = paste0("MC estimators values for R=", R), digits = 3) %>%
   kable_classic()
+
+mc.estimators.and.var <- cbind(data.frame(mcEstimators), data.frame(variance.mc))
 ```
 
 
@@ -140,7 +143,8 @@ ggplot(df_long, aes(x = Variable, y = Value)) +
 ```
 
 
-```{r plots-for-MC}
+```{r plots-for-MC, include=F}
+#to do not needed
 data <- data.frame(
   Value = c(monteCarloReplicates, monteCarloReplicates),
   Group = rep(c("Crude Monte Carlo estimator", "Place holder"), each = 100)
@@ -246,7 +250,7 @@ ggplot(result_df, aes(x = V1, y = V2, color = as.factor(j))) +
   theme(legend.position = "right")
 ```
 
-It looks that indeed procedure works as expected. Note that our stratas are ellipses, not the circle. But the assumption that each strata has probability $\frac{1}{m}$ still holds.
+It looks that indeed procedure works as expected. Note that our stratas are ellipses, not the circle. But the assumption that each strata has probability $\frac{1}{m}$ still holds. Or change but since we apply the same linear transformation this will not impact calculation as the factor simplify at the end.
 
 ### Estimator formulas
 
@@ -346,9 +350,9 @@ var.for.optimal.n1 <- sum(probs * var / r.for.optimal.scheme )
 
 The estimated value for $I = `r estimator.for.optimal.n1`$. The variance is $`r var.for.optimal.n1`$. 
 
-### $n \geq 2$ using proportional scheme 
+### $n \geq 2$ using proportional and best scheme 
 
-Now we can calculate the estimator for higher $n$. Proportion as before. 
+Now we can calculate the estimator for higher $n$. Proportion as before. The result are presented in the table.
 
 ```{r proportional-scheme-larger-n, cache=TRUE}
 
@@ -358,21 +362,109 @@ proportional.scheme <- sapply(indexVector, function(i)
     I.stratified.estimator <- sum(1/m * colMeans(result.for.single.n))
     probs <- rep(1/m, m)^2
     I.stratified.var <- sum((probs / samples_per_stratum) * apply(result.for.single.n, 2, var))
-    c(I.stratified.estimator, I.stratified.var)
+    
+    #best allocation
+    R <- sum(samples_per_stratum)
+    sigma.estimated.i <- apply(result.for.single.n, 2, sd)
+    factor <- R / sum(probs*sigma.estimated.i) 
+    r.for.optimal.scheme <- floor(probs*sigma.estimated.i * factor)
+    ##
+    
+    result.for.single.n.optimal <- StratifiedSimulation(i, r.for.optimal.scheme, s_0, r, sigma, K)
+    
+    I.stratified.estimator.optimal <-
+      sum(unlist(lapply(result.for.single.n.optimal, mean)) * 1 / m)
+    
+    
+    var.optimal <- unlist(lapply(result.for.single.n.optimal, var))
+    I.stratified.var.optimal <- sum(probs * var.optimal / r.for.optimal.scheme)
+    
+    c(I.stratified.estimator, I.stratified.var, I.stratified.estimator.optimal, I.stratified.var.optimal)
   }
 )
 
 results.proportional <- data.frame(t(proportional.scheme))
 
 ```
-```{r print-results-proportional}
-names(results.proportional) <- c("E(I)", "Var(I)")
-kbl(results.proportional, caption = "temp")
+```{r print-results}
+colnames <- rep(c("$E(I)$", "$Var(I)$"), 3)
+rownames(results.proportional) <- indexVector
+kbl(cbind(mc.estimators.and.var, results.proportional), caption = "Comarison between MC and Strartified with differen allocation scheme.", escape = FALSE, digits = 5, booktabs = T, col.names = colnames)%>%
+  kable_styling(bootstrap_options = c("striped", "hover")) %>%
+  add_header_above(c(" $n$ ", "Monte Carlo" = 2, "Stratified Proportional" = 2, "Stratified Optimal" = 2))
 ```
 
+### Observation
+
+The variance techniques works according to the theory. The variance is reduced when we compare to MC. Also changing the allocation scheme give some improvement. Here the result is presented for single $R$. I made some test and for higher $R$ (e.g. $10^6$) we obtain even better improvement ratio in terms of variance. For the MC method we have smaller bias for smaller number of replication $R$. I think it also highly depends on choosing strata for simulation. In practice I would use ordinary MC method.
+
+I haven't analyse the $m$ strata number influence here. 
 
 
-### $n \geq 2$ using optimal allocation scheme
+## Antithetic estimator
+
+The key idea here is to introduce dependency between elements in the sample. Analysing formula for variance for two random variables 
+
+$$\operatorname{Var}(X+Y)=\operatorname{Var}(X)+\operatorname{Var}(Y)+2 \operatorname{Cov}(X, Y)$$
+
+should give us the intuition: if the covariance of $X$ and $Y$ is negative the overall variance should be reduced.
+
+The estimator formula is exactly the same as for crude MC. 
+
+In this context we will use this method for European option. We will use  $Z_{2 i}=-Z_{2 i-1}$ where $Z_i$ is standard normal. For single generated value from brownian motion we apply following procedure.
+
+Make the pair $\left(Z_{2 i-1}, Z_{2 i}\right)$ and compute two stock prices:
+
+$$
+\begin{aligned}
+S_{2 i-1}(1) & =S(0) \exp \left(\mu +\sigma Z_{2 i-1}\right), \\
+S_{2 i}(1) & =S(0) \exp \left(\mu +\sigma Z_{2 i}\right) .
+\end{aligned}
+$$
+The for each $S_i(1)$ calculate the payoff as before.
+
+Same number of replication is used to compare with MC method.  
+
+```{r antihiethic-variables}
+
+AntitheticSimulation <- function(numOfReplicate, s_0, r, sigma, K)
+{
+  AntitheticReplicatesOfBrownian <- replicate(numOfReplicate / 2, GetBrownianSample(1), simplify = "vector")
+  merged <- numeric(numOfReplicate)
+  merged[2*(1:(numOfReplicate/2))] <- -AntitheticReplicatesOfBrownian
+  merged[2*(1:(numOfReplicate/2)) - 1] <- AntitheticReplicatesOfBrownian
+  mu <- r - (sigma^2) / 2
+  gmbSampleAnt <- s_0*exp(mu+ sigma * merged)
+  I <- exp(-r) * pmax(gmbSampleAnt - K, 0)
+}
+
+set.seed(42)
+AntitheticResults <- as.data.frame( AntitheticSimulation(numOfReplicate = R, s_0, r, sigma, K))
+
+Antithethic.estimator <- colMeans(AntitheticResults)
+
+Antithethic.var <- apply(AntitheticResults, 2, var)/R
+
+```
+
+The estimator value is $`r Antithethic.estimator`$. The variance is $`r Antithethic.var`$.
 
 
-#Todo
+Observation. Variance is not reduce a lot. 
+
+
+## Control Variate
+
+This is another simple technique. The key idea here is the fact that we know the exact expected value of other random variable. 
+
+$$
+\hat{Y}_R^{\mathrm{CV}}=\frac{1}{R} \sum_{i=1}^R\left(Y_j-\beta\left(X_j-\mathbb{E}[X]\right)\right),
+$$
+where $\beta$ is a coefficient chosen to minimize the variance of the estimator. The optimal $\beta$ is given by:
+
+$$
+\beta=\frac{\operatorname{Cov}(Y, X)}{\operatorname{Var} X}
+$$
+
+
+In this context $X=B \sim N(0,1)$. 
