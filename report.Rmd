@@ -39,7 +39,6 @@ S(t)=S(0) \exp \left(\mu^* t+\sigma B(t)\right), \quad 0 \leq t \leq T
 $$
 where $B(t)(0 \leq t \leq T)$ is Brownian motion.
 
-TODO: extend interpretation by my own comments.
 
 ## European and Asian option
 
@@ -50,11 +49,11 @@ In the case n = 1, this is called a European call option; otherwise, it is calle
 
   1. Crude Monte Carlo estimator
   2. Stratified estimator
+  3. Anthithetic variables
+  4. Control variates
   
   
 ## Monte Carlo description
-
-TO DO Add brownian motion description. 
 
 First we need to generate Brownian Motion $n$ points, equally spaced sample on $[0,1]$. We will use the fact that $\mathbf{B}=(B(1 / n), B(2 / n), \ldots, B(1))$ is a multivariate normal random variable $\mathcal{N}(\mathbf{0}, \boldsymbol{\Sigma})$ with the covariance matrix
 
@@ -188,6 +187,10 @@ blackScholes <- (s_0 * pnorm(d1)) - (K * exp(-r) * pnorm(d2))
 ```
 Using our setup parameters we obtain value $`r blackScholes`$. It is align with the MC simulation result. Even using $R=`r R`$ replication we have quite bias simulation. 
 
+
+### Observation 
+
+For European option (instant pay off ?) we have higher expected value but with higher variability. For Asian option the variability is a bit lower but the estimated payoff is also lower. The value of pay off seems converge to some value as $n$ increase. I would bet for some constants (e.g. 6/7) but I haven't perform simulation for extremely large $n$ to confirm this.
 
 ## Stratified sampling 
 
@@ -455,7 +458,7 @@ Observation. Variance is not reduce a lot.
 
 ## Control Variate
 
-This is another simple technique. The key idea here is the fact that we know the exact expected value of other random variable. 
+This is another simple technique. The key idea here is the fact that we know the exact expected value of other random variable. Then we use following correction for crude MC estimator:
 
 $$
 \hat{Y}_R^{\mathrm{CV}}=\frac{1}{R} \sum_{i=1}^R\left(Y_j-\beta\left(X_j-\mathbb{E}[X]\right)\right),
@@ -465,6 +468,86 @@ where $\beta$ is a coefficient chosen to minimize the variance of the estimator.
 $$
 \beta=\frac{\operatorname{Cov}(Y, X)}{\operatorname{Var} X}
 $$
+Usually we don't know the $Cov(Y,X)$. So we will use estimator from simulation.
+
+In this context $X=B \sim N(0,1)$ will be used as control variate. Since $\mathbb{E}[B]=0$ the formula become  
+
+$$
+\hat{Y}_R^{\mathrm{CV}}=\frac{1}{R} \sum_{j=1}^R\left(Y_j-\beta X_j\right).
+$$
 
 
-In this context $X=B \sim N(0,1)$. 
+The main difference between crude MC simulation is fact that we need to store sample from Brownian motion from each replicate.
+
+```{r cv-simulation, cache=T}
+set.seed(42)
+cvSimulation <- function(numOfReplicate, s_0, r, sigma, K)
+{
+    cvReplicates <- replicate(numOfReplicate, {
+    brownianSample <- GetBrownianSample(1)
+    mu <- r - (sigma^2) / 2
+    gmbSample <- s_0*exp(mu  + sigma * brownianSample)
+    
+    A <- mean(gmbSample)
+    
+    I <- exp(-r) * max(A - K, 0)
+    c(I, brownianSample)
+  })
+  cvReplicates
+}
+
+cvResults <- data.frame(t(cvSimulation(numOfReplicate = R, s_0, r, sigma, K)))
+```
+
+```{r cv-calculate-estimator}
+Y <- cvResults$X1
+X <- cvResults$X2
+beta <- cov(Y, X) / var(X)
+
+cv.estimator <- mean(Y - beta * X)
+cv.estimator.var <- var(Y)/length(Y)
+```
+
+Estimated value $I= `r cv.estimator`$. The variance for estimator is $`r cv.estimator.var`$. No significant improvement for European option compared to MC method. But we have lower bias comparing to previous method.
+
+### Higher number of replication $R=1000000$
+
+Lets check whether the difference in variance become more significant if we increase the number of replication.
+
+
+```{r test-for-higher-r, cache=T}
+R.higher <- as.integer(1e6)
+
+mc.higherR <- monteCarloSimulation(n=1, numOfReplicate = R.higher, s_0, r, sigma, K)
+cvResults.higherR <- data.frame(t(cvSimulation(numOfReplicate = R.higher, s_0, r, sigma, K)))
+```
+
+```{r calc-for-higher}
+
+Y <- cvResults.higherR$X1
+X <- cvResults.higherR$X2
+beta <- cov(Y, X) / var(X)
+
+cv.estimator.higherR <- mean(Y - beta * X)
+cv.estimator.var.higherR <- var(Y)/length(Y)
+
+mc.estimator.higherR <- mean(mc.higherR)
+mc.var.higherR <- var(mc.higherR) / length(mc.higherR)
+
+p <- cor(Y,X)
+
+mc.var.n1 <- mc_var_n1
+```
+
+|   $R$    |  $Var(\hat{I}^{MC})$ | $Var(\hat{I}^{CV})$ |
+|----------|-----------------------|---------------------|
+|  $10000$ | `r mc.var.n1`         | `r cv.estimator.var` |
+| $1000000$ | `r mc.var.higherR`   | `r cv.estimator.var.higherR`   |
+
+
+That's a bit odd. According to theory variance should be reduced. From theoretical calculation
+
+$$
+\operatorname{Var}\left(\hat{Y}_R^{C V}\right)= \ldots = \operatorname{Var} \hat{Y}_R^{\mathrm{CMC}}\left(1-\rho^2\right),
+$$
+where $\rho$ is correlation between pay of and Brownian motion.  In this case variables should be highly correlated. Estimate for correlation is $`r p`$ (in case $R=1000000$) thus I should observe significant reduction of variance (4 times less). Please note that estimated value is close to theoretical value even with lower bias. I didn't find any issue in implementation. I don't know how to comment the results. 
